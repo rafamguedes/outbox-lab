@@ -67,6 +67,7 @@ public class DashboardController {
         model.addAttribute("failedPageCount", failedPageCount);
         model.addAttribute("processedPageCount", processedPageCount);
         model.addAttribute("workerEnabled", worker.isEnabled());
+        model.addAttribute("workerType", worker.getType().getDisplayName());
         model.addAttribute("workerDescription", worker.description());
     }
 

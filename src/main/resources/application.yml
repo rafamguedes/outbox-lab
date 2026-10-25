@@ -30,8 +30,13 @@ server:
     include-message: never
 outbox:
   worker:
+    type: ${WORKER_TYPE:LISTEN_NOTIFY}
     enabled: ${WORKER_ENABLED:true}
+    poll-interval-ms: ${WORKER_POLL_INTERVAL_MS:1000}
     recovery-ms: 60000
     reconnect-ms: 2000
     retry-seconds: 12
     max-attempts: 2
+    cdc:
+      slot-name: ${CDC_SLOT_NAME:outbox_demo_slot}
+      publication-name: ${CDC_PUBLICATION_NAME:outbox_demo_publication}

@@ -4,7 +4,7 @@ Executed on October 25, 2026, on Windows with JDK 21, Maven 3.9.11, Docker Deskt
 
 ## Automated tests
 
-The final Maven run passed **52 tests: 22 unit tests and 30 integration tests**, with zero failures, errors, or skipped tests.
+The latest Maven run passed **85 tests: 47 unit tests and 38 integration tests**, with zero failures, errors, or skipped tests.
 
 | Test class | Count | Main checks |
 |---|---:|---|
@@ -13,6 +13,10 @@ The final Maven run passed **52 tests: 22 unit tests and 30 integration tests**,
 | `OutboxRunnerTest` | 10 | Empty queue, completion order, retry budget, permanent failures, and infrastructure errors |
 | `EventRetryServiceTest` | 3 | Selected-event queuing, rejected states, and failure propagation |
 | `OutboxIntegrationTest` | 30 | Real PostgreSQL transactions, migrations, locking, recovery, API, both dashboard lists, and manual recovery |
+| `PollingWorkerTest` | 5 | Repeated idle polling, pause/resume, multi-chunk draining, infrastructure recovery, and restart |
+| `WorkerConfigurationTest` | 9 | Selection of each implementation and rejection of invalid CDC identifiers/intervals |
+| `PgOutputCommitTest` | 11 | Commit end LSN, non-commit messages, truncated frames, and unsupported flags |
+| `WorkerStrategiesIntegrationTest` | 8 | Real polling and logical WAL streaming with notification triggers disabled |
 
 The unit tests use a real Jackson ObjectMapper except when deliberately simulating a serialization error. Repository mocks check exact IDs, parameters, ordering, and forbidden interactions. They do not prove transaction rollback; integration tests query persisted rows after failures to verify that behavior.
 
@@ -24,7 +28,7 @@ Additional checks reject manual recovery for `PENDING`, `RETRY`, and `PROCESSED`
 
 ## Checks against tests that pass with broken code
 
-Six deliberate defects were applied separately in isolated source copies. The normal suite passed without mutations. Each selected test then failed with an assertion failure, Maven exit code 1, zero test errors, and zero skipped tests. Compilation or environment failures were not accepted as evidence of detection.
+Eight deliberate defects were applied separately in isolated source copies. The normal suite passed without mutations. Each selected test then failed with an assertion failure, Maven exit code 1, zero test errors, and zero skipped tests. Compilation or environment failures were not accepted as evidence of detection.
 
 | Deliberate defect | Test that rejected it |
 |---|---|
@@ -34,8 +38,10 @@ Six deliberate defects were applied separately in isolated source copies. The no
 | Use the application clock for event availability | `eventIsImmediatelyAvailableEvenWhenApplicationClockIsAhead` |
 | Remove the transition to permanent failure | `exhaustedAttemptsBecomePermanentIncludingFailuresAfterManualRetry` (three parameter cases) |
 | Remove the `FAILED` condition from manual requeuing | `manualRetryRejectsPendingRetryingProcessedAndMissingEvents` |
+| Select the notification implementation when CDC was requested | `constructsExactlyTheRequestedImplementationWithoutOpeningConnections` |
+| Acknowledge the commit's initial LSN instead of its end LSN | `extractsTheTransactionEndLsnWithoutChangingBufferPosition` |
 
-All six defects were detected. Mutations were never applied to the delivered source. The final baseline suite passed all 52 tests.
+All eight defects were detected. Mutations were never applied to the delivered source. The final baseline suite passed all 85 tests.
 
 These are focused fault checks, not exhaustive mutation coverage or a guarantee that every possible defect is detected. The recovery test also waits for the worker to become idle before making an event pending without a notification, so an earlier wakeup cannot mask a broken periodic recovery mechanism.
 
@@ -48,6 +54,22 @@ Two immediate-processing assertions exposed an application/database clock differ
 Tests verify notification delivery after commit and no delivery after rollback, startup recovery, timed retries without another order, listener reconnection after terminating its PostgreSQL backend, pause/resume, missed-signal recovery, infrastructure failure recovery, and draining 200 events across multiple processing chunks.
 
 The idle test first requires a notification-triggered order to finish, then checks that the number of outbox lock queries does not increase during a 1.4-second idle window. This rejects the previous one-second worker polling behavior. The configured safety check remains 60 seconds. Dashboard refresh queries are separate from worker queries.
+
+## Worker strategy verification
+
+The default Spring context exposes exactly one `OutboxWorker` bean. Unit tests construct each requested implementation and verify that worker selection does not itself open database connections. Startup rejects CDC on a second, real PostgreSQL container whose WAL level remains `replica`.
+
+Polling and CDC integration tests explicitly disable both outbox notification triggers. They verify polling while idle, pause/resume, timed retry, commit/rollback isolation, ignoring unrelated-table writes, CDC feedback advancement, slot reuse after restart, reconnection after backend termination, permanent failure exhaustion, and manual recovery through WAL. During an uncommitted transaction, the test checks both invisibility from a separate connection and visibility from the transaction's own connection.
+
+Docker runtime smoke tests then switched the existing application through all three configurations, with PostgreSQL using logical WAL:
+
+| Worker | Run ID | Orders created/processed | Attempts per event | Dedicated source sessions |
+|---|---|---:|---:|---:|
+| CDC | `929131ac` | 2 / 2 | 1 | 1 logical WAL sender |
+| Polling | `3337c3ac` | 2 / 2 | 1 | 0 |
+| LISTEN/NOTIFY | `15cb7ecd` | 2 / 2 | 1 | 1 notification connection |
+
+The dashboard displayed the correct mode each time. The application was returned to `LISTEN_NOTIFY`. PostgreSQL remains at `wal_level=logical`, and the CDC slot is inactive and retained for reuse. Configuration and slot retention details are in [WORKERS.md](WORKERS.md).
 
 ## Existing data and manual simulation
 
@@ -67,9 +89,9 @@ The final script passed PowerShell syntax parsing and rejected `FailureAttempts=
 
 ## Docker runtime
 
-The final image built successfully and started with the existing database at Flyway V6. All six migrations were recorded as successful. The final image size reported by Docker was **173,245,425 bytes**, approximately 173 MB decimal. Maven, the full JDK, and test dependencies are excluded from the runtime stage.
+The final image built successfully and started with the existing database at Flyway V6. No new schema migration was needed for worker selection; the CDC publication and slot are initialized only when CDC is selected. All six migrations remained valid. The latest image size reported by Docker was **173,275,530 bytes**, approximately 173 MB decimal. Maven, the full JDK, and test dependencies are excluded from the runtime stage.
 
-An idle observation after the final smoke run reported approximately **131.9 MiB / 192 MiB** for the application and **73.33 MiB / 96 MiB** for PostgreSQL. Both containers reported zero OOM and OOM-kill events. The kernel had reclaimed database memory at the configured limit; these measurements are observations rather than a capacity guarantee.
+An idle observation after the worker strategy smoke runs reported approximately **128.4 MiB / 192 MiB** for the application and **19.01 MiB / 96 MiB** for PostgreSQL. Both containers reported zero OOM and OOM-kill events. These measurements are observations rather than a capacity guarantee.
 
 The combined container limits are 288 MiB. This excludes Docker Desktop, its VM, the host, build processes, and Testcontainers. Run builds/tests elsewhere if those development tools exceed the memory available on the deployment machine.
 

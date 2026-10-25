@@ -8,6 +8,7 @@ import com.example.outbox.service.EventRetryService;
 import com.example.outbox.repository.OutboxStore;
 import com.example.outbox.worker.OutboxRunner;
 import com.example.outbox.worker.OutboxWorker;
+import com.example.outbox.worker.ListenNotifyWorker;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -49,7 +50,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class OutboxIntegrationTest {
     @Container @ServiceConnection
-    static final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:17-alpine");
+    static final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:17-alpine")
+            .withCommand("postgres", "-c", "wal_level=logical", "-c", "max_replication_slots=4",
+                    "-c", "max_wal_senders=4", "-c", "max_slot_wal_keep_size=64MB");
     @Autowired OrderService service;
     @Autowired EventRetryService retryService;
     @Autowired OutboxRunner runner;
@@ -227,7 +230,7 @@ class OutboxIntegrationTest {
 
     @Test
     void automaticRetryExhaustionStopsPollingAndManualRecoveryWakesWorker() {
-        OutboxWorker worker = startWorker(60000, 500);
+        ListenNotifyWorker worker = startWorker(60000, 500);
         try {
             awaitIdle(worker);
             var order = service.create(new CreateOrderRequest("Exhaust automatic retries", 1, true, 2));
@@ -423,7 +426,7 @@ class OutboxIntegrationTest {
 
     @Test
     void notificationWakesWorkerAndIdleWorkerDoesNotPollEverySecond() {
-        OutboxWorker worker = startWorker(60000, 500);
+        ListenNotifyWorker worker = startWorker(60000, 500);
         try {
             awaitIdle(worker);
             var order = service.create(new CreateOrderRequest("Signal", 1, false));
@@ -439,7 +442,7 @@ class OutboxIntegrationTest {
     @Test
     void initialRecoveryFindsEventsStoredBeforeListenerConnected() {
         var order = service.create(new CreateOrderRequest("Before listener", 1, false));
-        OutboxWorker worker = startWorker(60000, 500);
+        ListenNotifyWorker worker = startWorker(60000, 500);
         try { awaitProcessed(order.id()); } finally { worker.stop(); }
     }
 
@@ -455,7 +458,7 @@ class OutboxIntegrationTest {
             // O PostgreSQL agrupa sinais idênticos emitidos na mesma transação.
             assertThat(notificationCount(pg, 2000)).isEqualTo(1);
         }
-        OutboxWorker worker = startWorker(60000, 500);
+        ListenNotifyWorker worker = startWorker(60000, 500);
         try {
             await().atMost(Duration.ofSeconds(25)).untilAsserted(() ->
                     assertThat(store.countProcessed()).isEqualTo(200));
@@ -465,7 +468,7 @@ class OutboxIntegrationTest {
 
     @Test
     void retryTimerWakesWorkerWithoutAnotherOrder() {
-        OutboxWorker worker = startWorker(60000, 500);
+        ListenNotifyWorker worker = startWorker(60000, 500);
         try {
             awaitIdle(worker);
             var order = service.create(new CreateOrderRequest("Timed retry", 1, true));
@@ -479,16 +482,16 @@ class OutboxIntegrationTest {
 
     @Test
     void reconnectRecoversEventsCreatedDuringDisconnection() {
-        OutboxWorker worker = startWorker(60000, 1500);
+        ListenNotifyWorker worker = startWorker(60000, 1500);
         try {
             awaitIdle(worker);
-            int oldPid = worker.getListenerBackendPid();
+            int oldPid = worker.getSourceBackendPid();
             assertThat(jdbc.queryForObject("SELECT pg_terminate_backend(?)", Boolean.class, oldPid)).isTrue();
-            await().atMost(Duration.ofSeconds(5)).until(() -> !worker.isListenerConnected());
+            await().atMost(Duration.ofSeconds(5)).until(() -> !worker.isSourceConnected());
             var order = service.create(new CreateOrderRequest("During disconnect", 1, false));
             await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> {
-                assertThat(worker.isListenerConnected()).isTrue();
-                assertThat(worker.getListenerBackendPid()).isNotEqualTo(oldPid);
+                assertThat(worker.isSourceConnected()).isTrue();
+                assertThat(worker.getSourceBackendPid()).isNotEqualTo(oldPid);
                 assertThat(store.findOrder(order.id()).orElseThrow().status()).isEqualTo("PROCESSED");
             });
         } finally { worker.stop(); }
@@ -496,7 +499,7 @@ class OutboxIntegrationTest {
 
     @Test
     void resumeRecoversEventsReceivedWhilePaused() {
-        OutboxWorker worker = startWorker(60000, 500);
+        ListenNotifyWorker worker = startWorker(60000, 500);
         try {
             awaitIdle(worker);
             worker.setEnabled(false);
@@ -510,7 +513,7 @@ class OutboxIntegrationTest {
 
     @Test
     void periodicRecoveryFindsAnEventWithoutNotification() {
-        OutboxWorker worker = startWorker(2000, 200);
+        ListenNotifyWorker worker = startWorker(2000, 200);
         try {
             var order = service.create(new CreateOrderRequest("Periodic recovery", 1, false));
             awaitProcessed(order.id());
@@ -531,7 +534,7 @@ class OutboxIntegrationTest {
     void infrastructureFailureIsRetriedWithoutAnotherSignal() {
         var order = service.create(new CreateOrderRequest("Infrastructure retry", 1, false));
         doThrow(new IllegalStateException("Transient failure")).doCallRealMethod().when(store).lockNextEvent();
-        OutboxWorker worker = startWorker(60000, 500);
+        ListenNotifyWorker worker = startWorker(60000, 500);
         try { awaitProcessed(order.id()); } finally { worker.stop(); }
     }
 
@@ -598,13 +601,13 @@ class OutboxIntegrationTest {
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
                 assertThat(store.findOrder(id).orElseThrow().status()).isEqualTo("PROCESSED"));
     }
-    private OutboxWorker startWorker(long recoveryMillis, long reconnectMillis) {
-        var worker = new OutboxWorker(runner, store, connectionDetails, true, recoveryMillis, reconnectMillis);
+    private ListenNotifyWorker startWorker(long recoveryMillis, long reconnectMillis) {
+        var worker = new ListenNotifyWorker(runner, store, connectionDetails, true, recoveryMillis, reconnectMillis);
         worker.start();
         return worker;
     }
-    private void awaitIdle(OutboxWorker worker) {
-        await().atMost(Duration.ofSeconds(10)).until(() -> worker.isListenerConnected()
+    private void awaitIdle(ListenNotifyWorker worker) {
+        await().atMost(Duration.ofSeconds(10)).until(() -> worker.isSourceConnected()
                 && worker.getState().equals("WAITING_FOR_SIGNAL") && lockCalls() > 0);
     }
     private long lockCalls() {

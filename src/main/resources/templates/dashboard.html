@@ -30,7 +30,7 @@
         <article><span>Automatic retry scheduled</span><strong class="purple" th:text="${retryCount}">0</strong><small>The worker will try again automatically</small></article>
         <article><span>Permanent failures</span><strong class="red" th:text="${failureCount}">0</strong><small>Automatic attempt limit reached</small></article>
       </div>
-      <div class="worker-bar"><div class="worker-info"><span class="worker-icon">⚙</span><div><strong>Outbox worker</strong><p th:text="${workerDescription}"></p></div>
+      <div class="worker-bar"><div class="worker-info"><span class="worker-icon">⚙</span><div><strong th:text="${'Outbox worker · ' + workerType}">Outbox worker</strong><p th:text="${workerDescription}"></p></div>
         <span class="badge" th:classappend="${workerEnabled ? 'running' : 'paused'}" th:text="${workerEnabled ? 'Active' : 'Paused'}"></span></div>
         <span class="live-label"><span class="small-dot"></span> Refreshes every 2 s</span></div>
       <section class="card table-card" id="failed">

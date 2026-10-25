@@ -2,6 +2,8 @@
 
 A small Java 21, Spring Boot 3.5.16, Spring JDBC, Thymeleaf, and PostgreSQL 17 example of transactional event storage and background processing.
 
+`OutboxWorker` has three implementations: polling, LISTEN/NOTIFY (the default), and CDC through PostgreSQL's logical WAL stream. One implementation is selected per application instance, while order processing and retry rules remain shared.
+
 The dashboard has separate lists for processed events and permanent failures, each with 25 rows per page. The worker makes an initial attempt and one automatic retry after 12 seconds. Only events that exhaust those attempts can be retried manually. Orders are submitted through the standalone script or API.
 
 ![Permanent failures and processed events](docs/images/dashboard.jpg)
@@ -24,6 +26,24 @@ docker compose down
 ```
 
 PostgreSQL is available at `localhost:5433`. The database, username, and password are `outbox`. The named volume preserves data across restarts. Ports bind to loopback for this local demonstration.
+
+## Choose a worker
+
+Set `WORKER_TYPE` to `POLLING`, `LISTEN_NOTIFY`, or `CDC`, then recreate the application with Compose. CDC additionally requires `POSTGRES_WAL_LEVEL=logical` and a PostgreSQL restart:
+
+```powershell
+$env:WORKER_TYPE = 'POLLING'
+docker compose up --build -d
+
+$env:WORKER_TYPE = 'LISTEN_NOTIFY'
+docker compose up -d
+
+$env:POSTGRES_WAL_LEVEL = 'logical'
+$env:WORKER_TYPE = 'CDC'
+docker compose up -d
+```
+
+Keep logical WAL enabled when switching modes after CDC has created its slot. The dashboard identifies the active worker. See [WORKERS.md](docs/WORKERS.md) for mechanisms, configuration, resource differences, replication slots, and recovery.
 
 ## Manual simulation
 
@@ -100,7 +120,7 @@ Transaction A: INSERT order + INSERT outbox + trigger NOTIFY
     |
 COMMIT; API returns 201 Created
     |
-LISTEN/NOTIFY wakes OutboxWorker
+The selected OutboxWorker detects committed work
     |
 OutboxRunner.processNext
 Transaction B: SELECT ... FOR UPDATE SKIP LOCKED
@@ -132,7 +152,7 @@ Migration V3 adds statement-level triggers for INSERTs and updates to `available
 - Infrastructure errors and listener reconnection use a 2-second retry interval.
 - Resuming the worker explicitly signals an immediate pending-event check.
 
-The worker uses no one-second polling loop. The visible dashboard still refreshes every two seconds; its database queries are separate from worker activity.
+LISTEN/NOTIFY and CDC use signals, retry timers, and a 60-second recovery interval. The polling implementation queries the database every second by default. The visible dashboard still refreshes every two seconds; its queries are separate from worker activity.
 
 Notifications are not a durable message broker. The outbox, startup recovery, retry timer, reconnection handling, and periodic safety check preserve pending work when a signal is missed.
 
@@ -185,7 +205,9 @@ Run only the unit tests, without starting Spring or Docker:
 
 Unit tests cover real JSON serialization/deserialization, matching order/event IDs, normalized products, invalid event types and payloads, the automatic attempt limit, failures after manual recovery, retry decisions, and infrastructure failure propagation. Repository mocks isolate these decisions; they do not prove database rollback.
 
-The suite contains 52 tests: 22 unit tests and 30 PostgreSQL integration tests.
+The suite also checks worker selection, polling lifecycle, and pgoutput commit decoding. Real PostgreSQL tests disable notification triggers when verifying polling and CDC, so a CDC test cannot pass because NOTIFY happened to wake a worker.
+
+The current Java suite has 85 tests: 47 unit tests and 38 PostgreSQL integration tests.
 
 PostgreSQL integration tests cover atomic storage, rollback, retry limits, idempotent processing, competing workers, API validation, HTML escaping, transactional notifications, idle behavior, retry timing, reconnection, safety recovery, infrastructure errors, and migration. Dashboard checks include both paginated lists, manual recovery only for `FAILED`, concurrent clicks, preservation of attempt history, notification-triggered processing, and rollback of a manual request.
 
@@ -200,7 +222,7 @@ The integration suite requires Docker and uses a separate disposable PostgreSQL 
 
 The combined container memory limits are 288 MiB, excluding Docker Desktop, its VM, the host, and build tools.
 
-The final image uses Alpine and a jlink runtime. Maven, the full JDK, and test dependencies stay in the build stage. The JVM uses a 16–64 MiB heap, an 80 MiB metaspace limit, a 16 MiB code cache, 8 MiB of direct memory, Serial GC, and one visible processor. Tomcat has up to six request threads. Hikari has up to three connections; the listener adds one dedicated connection and two worker threads.
+The final image uses Alpine and a jlink runtime. Maven, the full JDK, and test dependencies stay in the build stage. The JVM uses a 16–64 MiB heap, an 80 MiB metaspace limit, a 16 MiB code cache, 8 MiB of direct memory, Serial GC, and one visible processor. Tomcat has up to six request threads. Hikari has up to three connections. Polling uses one worker thread; LISTEN/NOTIFY and CDC use two threads and a dedicated source connection. CDC also opens a short-lived setup connection when establishing its publication/slot.
 
 PostgreSQL uses 16 MiB shared buffers, 1 MiB work memory, up to ten connections, and disabled parallel workers. Container logs rotate at 1 MiB with two files per service.
 
@@ -219,6 +241,7 @@ outbox-demo/
 ├── docs/
 │   ├── GITHUB.md
 │   ├── LOAD-TEST.md
+│   ├── WORKERS.md
 │   ├── VALIDATION.md
 │   └── images/dashboard.jpg
 ├── scripts/
@@ -245,6 +268,14 @@ outbox-demo/
 │   │   ├── OrderService.java
 │   │   └── OrderProcessor.java
 │   └── worker/
+│       ├── AbstractOutboxWorker.java
+│       ├── JdbcSignalWorker.java
+│       ├── PollingWorker.java
+│       ├── ListenNotifyWorker.java
+│       ├── CdcWorker.java
+│       ├── PgOutputCommit.java
+│       ├── WorkerType.java
+│       ├── WorkerConfiguration.java
 │       ├── OutboxRunner.java
 │       └── OutboxWorker.java
 ├── src/main/resources/
@@ -254,13 +285,17 @@ outbox-demo/
 │   └── templates/
 └── src/test/java/com/example/outbox/
     ├── integration/
-    │   └── OutboxIntegrationTest.java
+    │   ├── OutboxIntegrationTest.java
+    │   └── WorkerStrategiesIntegrationTest.java
     ├── service/
     │   ├── EventRetryServiceTest.java
     │   ├── OrderServiceTest.java
     │   └── OrderProcessorTest.java
     └── worker/
-        └── OutboxRunnerTest.java
+        ├── OutboxRunnerTest.java
+        ├── PollingWorkerTest.java
+        ├── PgOutputCommitTest.java
+        └── WorkerConfigurationTest.java
 ```
 
 `controller` handles REST and dashboard requests. `dto` contains request contracts, and `domain` holds persisted data representations. `repository` owns SQL and row mapping. `service` contains transactional creation, business processing, and individual retry requests. `worker` owns notification listening and processing coordination. Integration tests, migrations, static assets, templates, documentation, and manual scripts have their own directories.

@@ -6,4 +6,4 @@
 
 **Description:**
 
-Lightweight transactional outbox demo with Java 21, Spring Boot, PostgreSQL LISTEN/NOTIFY, automatic retries, manual recovery of permanent failures, a Thymeleaf dashboard, Docker, and tests.
+Transactional outbox demo with Java 21, Spring Boot, PostgreSQL workers for polling, LISTEN/NOTIFY and CDC, automatic retries, manual failure recovery, a Thymeleaf dashboard, Docker, and tests.

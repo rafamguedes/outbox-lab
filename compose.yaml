@@ -29,6 +29,14 @@ services:
       - autovacuum_max_workers=1
       - -c
       - jit=off
+      - -c
+      - wal_level=${POSTGRES_WAL_LEVEL:-replica}
+      - -c
+      - max_replication_slots=2
+      - -c
+      - max_wal_senders=2
+      - -c
+      - max_slot_wal_keep_size=64MB
     environment:
       POSTGRES_DB: outbox
       POSTGRES_USER: outbox
@@ -57,6 +65,11 @@ services:
       DB_URL: jdbc:postgresql://postgres:5432/outbox
       DB_USER: outbox
       DB_PASSWORD: outbox
+      WORKER_TYPE: ${WORKER_TYPE:-LISTEN_NOTIFY}
+      WORKER_ENABLED: ${WORKER_ENABLED:-true}
+      WORKER_POLL_INTERVAL_MS: ${WORKER_POLL_INTERVAL_MS:-1000}
+      CDC_SLOT_NAME: ${CDC_SLOT_NAME:-outbox_demo_slot}
+      CDC_PUBLICATION_NAME: ${CDC_PUBLICATION_NAME:-outbox_demo_publication}
     depends_on:
       postgres:
         condition: service_healthy
