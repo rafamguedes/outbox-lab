@@ -1,0 +1,65 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    logging:
+      driver: local
+      options:
+        max-size: "1m"
+        max-file: "2"
+    mem_limit: 96m
+    cpus: 0.50
+    shm_size: 32m
+    command:
+      - postgres
+      - -c
+      - shared_buffers=16MB
+      - -c
+      - work_mem=1MB
+      - -c
+      - maintenance_work_mem=16MB
+      - -c
+      - effective_cache_size=64MB
+      - -c
+      - max_connections=10
+      - -c
+      - max_parallel_workers=0
+      - -c
+      - max_worker_processes=0
+      - -c
+      - autovacuum_max_workers=1
+      - -c
+      - jit=off
+    environment:
+      POSTGRES_DB: outbox
+      POSTGRES_USER: outbox
+      POSTGRES_PASSWORD: outbox
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U outbox -d outbox"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  app:
+    build: .
+    logging:
+      driver: local
+      options:
+        max-size: "1m"
+        max-file: "2"
+    mem_limit: 192m
+    cpus: 0.50
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/outbox
+      DB_USER: outbox
+      DB_PASSWORD: outbox
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org"><body>
+<table><tbody><tr><td th:fragment="eventIdentity(event)">
+  <code th:text="${#strings.substring(event.id.toString(), 0, 8)}" th:title="${event.id}"></code>
+  <small class="cell-sub">Order <span th:text="${#strings.substring(event.orderId.toString(), 0, 8)}" th:title="${event.orderId}"></span></small>
+  <span class="event-type" th:text="${event.type}"></span>
+</td></tr></tbody></table>
+<div th:fragment="eventDetails(event)"><details th:attr="data-event-id=${event.id}"><summary>View payload and identifiers</summary>
+  <div class="event-detail"><pre th:text="${event.payload}"></pre><dl>
+    <dt>Event ID</dt><dd th:text="${event.id}"></dd><dt>Order ID</dt><dd th:text="${event.orderId}"></dd>
+    <dt>Created at</dt><dd th:text="${#temporals.format(event.createdAt.atZoneSameInstant(T(java.time.ZoneId).of('America/Sao_Paulo')), 'dd/MM/yyyy HH:mm:ss')}"></dd>
+  </dl></div></details></div>
+</body></html>

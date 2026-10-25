@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Outbox Lab — Event monitoring</title>
+  <link rel="stylesheet" th:href="@{/app.css}" href="/app.css">
+  <script defer th:src="@{/app.js}" src="/app.js"></script>
+</head>
+<body>
+<aside class="sidebar">
+  <a href="/" class="brand"><span class="brand-icon">↗</span> outbox<span class="brand-light">lab</span></a>
+  <div class="sidebar-caption">MONITORING</div>
+  <a class="nav-item active" href="#failed"><span>!</span> Permanent failures</a>
+  <a class="nav-item" href="#processed"><span>✓</span> Processed events</a>
+  <div class="sidebar-bottom"><span class="small-dot"></span> Demo environment
+    <p>Java 21 · Spring Boot<br>PostgreSQL · Thymeleaf</p></div>
+</aside>
+<main>
+  <header class="topbar"><span>Monitoring <span class="slash">/</span> <strong>Transactional Outbox</strong></span>
+    <span class="version">OUTBOX LAB</span></header>
+  <div class="content">
+    <div class="page-heading"><p class="eyebrow">EVENT LIFECYCLE</p><h1>Event monitoring</h1>
+      <p class="subtitle">Follow completed events and recover failures after automatic retries are exhausted.</p></div>
+    <div class="notice" role="status" th:if="${message}" th:text="${message}"></div>
+    <section id="data" th:fragment="data" th:attr="data-failed-page=${failedPage},data-processed-page=${processedPage}" aria-label="Event monitoring">
+      <div class="monitor-stats">
+        <article><span>Processed events</span><strong class="green" th:text="${processedCount}">0</strong><small>Order and event committed together</small></article>
+        <article><span>Automatic retry scheduled</span><strong class="purple" th:text="${retryCount}">0</strong><small>The worker will try again automatically</small></article>
+        <article><span>Permanent failures</span><strong class="red" th:text="${failureCount}">0</strong><small>Automatic attempt limit reached</small></article>
+      </div>
+      <div class="worker-bar"><div class="worker-info"><span class="worker-icon">⚙</span><div><strong>Outbox worker</strong><p th:text="${workerDescription}"></p></div>
+        <span class="badge" th:classappend="${workerEnabled ? 'running' : 'paused'}" th:text="${workerEnabled ? 'Active' : 'Paused'}"></span></div>
+        <span class="live-label"><span class="small-dot"></span> Refreshes every 2 s</span></div>
+      <section class="card table-card" id="failed">
+        <div class="section-heading"><div><h2>Permanent failures <span class="table-chip">FAILED</span></h2>
+          <p>Only exhausted events can be retried manually. Each click queues one additional attempt.</p></div></div>
+        <div class="table-scroll"><table>
+          <thead><tr><th>Event / order</th><th>Last error</th><th>Attempts</th><th>Action</th></tr></thead>
+          <tbody>
+            <tr th:if="${failedEvents.isEmpty()}"><td colspan="4"><div class="empty"><span>✓</span><strong>No permanent failures</strong>
+              <p>Events are processing normally or still within their automatic retry budget.</p></div></td></tr>
+            <tr th:each="event : ${failedEvents}" th:attr="data-event-row=${event.id}">
+              <td th:replace="~{fragments/events :: eventIdentity(${event})}"></td>
+              <td class="failure-cell"><p class="event-error" th:text="${event.lastError}"></p>
+                <div th:replace="~{fragments/events :: eventDetails(${event})}"></div></td>
+              <td><span class="attempt-count" th:text="${event.attempts}"></span><small class="cell-sub">Total attempts</small></td>
+              <td><form class="retry-form" method="post" th:action="@{/dashboard/events/{id}/retry(id=${event.id})}">
+                <input type="hidden" name="failedPage" th:value="${failedPage}"><input type="hidden" name="processedPage" th:value="${processedPage}">
+                <button class="button primary" type="submit" th:attr="aria-label=${'Retry failed event ' + event.id}">↻ Retry manually</button></form></td>
+            </tr>
+          </tbody>
+        </table></div>
+        <div class="table-footer"><span>25 per page · Newest events first</span><nav class="pagination" aria-label="Permanent failure pages">
+          <a th:if="${failedPage > 1}" th:href="@{/(failedPage=${failedPage - 1},processedPage=${processedPage})}">← Previous</a>
+          <span th:text="${'Page ' + failedPage + ' of ' + failedPageCount}"></span>
+          <a th:if="${failedPage < failedPageCount}" th:href="@{/(failedPage=${failedPage + 1},processedPage=${processedPage})}">Next →</a>
+        </nav></div>
+      </section>
+      <section class="card table-card processed-card" id="processed">
+        <div class="section-heading"><div><h2>Processed events <span class="table-chip success-chip">PROCESSED</span></h2>
+          <p>Successfully completed events, ordered by completion time.</p></div></div>
+        <div class="table-scroll"><table>
+          <thead><tr><th>Event / order</th><th>Attempts</th><th>Processed at</th><th>Details</th></tr></thead>
+          <tbody>
+            <tr th:if="${processedEvents.isEmpty()}"><td colspan="4"><div class="empty"><strong>No processed events yet</strong>
+              <p>Submit orders using the simulation script to follow processing here.</p></div></td></tr>
+            <tr th:each="event : ${processedEvents}" th:attr="data-processed-row=${event.id}">
+              <td th:replace="~{fragments/events :: eventIdentity(${event})}"></td>
+              <td><span class="attempt-count success-attempt" th:text="${event.attempts}"></span></td>
+              <td class="date-cell" th:text="${#temporals.format(event.processedAt.atZoneSameInstant(T(java.time.ZoneId).of('America/Sao_Paulo')), 'dd/MM/yyyy HH:mm:ss')}"></td>
+              <td><div th:replace="~{fragments/events :: eventDetails(${event})}"></div></td>
+            </tr>
+          </tbody>
+        </table></div>
+        <div class="table-footer"><span>25 per page · São Paulo time</span><nav class="pagination" aria-label="Processed event pages">
+          <a th:if="${processedPage > 1}" th:href="@{/(failedPage=${failedPage},processedPage=${processedPage - 1})}">← Previous</a>
+          <span th:text="${'Page ' + processedPage + ' of ' + processedPageCount}"></span>
+          <a th:if="${processedPage < processedPageCount}" th:href="@{/(failedPage=${failedPage},processedPage=${processedPage + 1})}">Next →</a>
+        </nav></div>
+      </section>
+    </section>
+    <footer class="page-footer"><span>Outbox Lab · Automatic retries, manual recovery after exhaustion</span><span>Orders enter through scripts and the API.</span></footer>
+    <p id="refresh-status" class="refresh-status" role="status" aria-live="polite"></p>
+  </div>
+</main>
+</body>
+</html>

@@ -1,0 +1,37 @@
+spring:
+  application:
+    name: outbox-demo
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5433/outbox}
+    username: ${DB_USER:outbox}
+    password: ${DB_PASSWORD:outbox}
+    hikari:
+      maximum-pool-size: 3
+      minimum-idle: 0
+      idle-timeout: 10000
+      connection-timeout: 3000
+  servlet:
+    multipart:
+      enabled: false
+  jackson:
+    time-zone: America/Sao_Paulo
+server:
+  servlet:
+    session:
+      tracking-modes: cookie
+  tomcat:
+    threads:
+      max: 6
+      min-spare: 1
+    max-connections: 32
+    accept-count: 8
+    connection-timeout: 5s
+  error:
+    include-message: never
+outbox:
+  worker:
+    enabled: ${WORKER_ENABLED:true}
+    recovery-ms: 60000
+    reconnect-ms: 2000
+    retry-seconds: 12
+    max-attempts: 2
